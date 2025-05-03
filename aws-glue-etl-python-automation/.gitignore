@@ -1,0 +1,13 @@
+# Python
+*.pyc
+__pycache__/
+
+# AWS credentials
+.aws/
+
+# Virtual environments
+env/
+venv/
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
