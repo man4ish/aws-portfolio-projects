@@ -53,6 +53,7 @@ Module Dependencies:
 import os
 import pandas as pd
 import numpy as np
+from sklearn import datasets
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
@@ -60,73 +61,62 @@ import joblib
 import boto3
 import sagemaker
 from sagemaker import get_execution_role
-from sagemaker.sklearn import SKLearnModel
-
-# Function to load the model from the deployed endpoint (this can be used for inference)
-def model_fn(model_dir):
-    model = joblib.load(os.path.join(model_dir, 'model.joblib'))
-    return model
+from sagemaker.sklearn.estimator import SKLearn  # Correct class for training
 
 if __name__ == '__main__':
-    # 1. Load the dataset (Replace this with your own dataset)
-    print("Loading dataset...")
+    # 1. Load dataset
+    print("Loading Iris dataset...")
     iris = datasets.load_iris()
     data = pd.DataFrame(data=iris.data, columns=iris.feature_names)
     data['target'] = iris.target
 
-    # 2. Save dataset to CSV file and upload it to S3
-    print("Uploading dataset to S3...")
-    data.to_csv('iris.csv', index=False)
+    # 2. Save to CSV and upload to S3
+    print("Saving dataset and uploading to S3...")
+    csv_file = 'iris.csv'
+    data.to_csv(csv_file, index=False)
 
-    # Set up S3 client
-    s3_client = boto3.client('s3')
-    bucket_name = 'your-s3-bucket-name'  # Make sure to change this to your bucket name
-    s3_client.create_bucket(Bucket=bucket_name)
-    
-    # Upload the file to S3
-    s3_client.upload_file('iris.csv', bucket_name, 'iris/iris.csv')
-    s3_uri = f's3://{bucket_name}/iris/iris.csv'
-    print(f"Dataset uploaded to: {s3_uri}")
+    # Set your S3 bucket
+    bucket_name = 'your-s3-bucket-name'  # Replace with your actual bucket name
+    s3_prefix = 'iris'
+    s3_key = f'{s3_prefix}/{csv_file}'
 
-    # 3. SageMaker setup
-    print("Setting up SageMaker session...")
-    role = get_execution_role()  # Automatically fetch the execution role of the notebook
-    sagemaker_session = sagemaker.Session()
+    s3 = boto3.client('s3')
+    s3.upload_file(csv_file, bucket_name, s3_key)
+    s3_uri = f's3://{bucket_name}/{s3_key}'
+    print(f"Data uploaded to: {s3_uri}")
+
+    # 3. SageMaker config
+    print("Configuring SageMaker...")
+    role = get_execution_role()
+    session = sagemaker.Session()
     output_path = f's3://{bucket_name}/output/'
 
-    # 4. Train the model using SageMaker
-    print("Training the model with SageMaker...")
-
-    from sagemaker.sklearn.estimator import SKLearnModel
-    estimator = sagemaker.sklearn.model.SKLearnModel(
-        model_data=s3_uri, 
-        role=role, 
-        entry_point='train_script.py',  # The script that will train the model
-        framework_version='0.23-1',  # Framework version for sklearn
-        instance_type='ml.m4.xlarge',  # Instance type to use
-        sagemaker_session=sagemaker_session
+    # 4. Define estimator
+    estimator = SKLearn(
+        entry_point='iris_model_train.py',  # Training script
+        role=role,
+        instance_type='ml.m4.xlarge',
+        framework_version='0.23-1',
+        sagemaker_session=session,
+        output_path=output_path
     )
 
-    # 5. Start training job
+    # 5. Fit model
+    print("Starting training job...")
     estimator.fit({'train': s3_uri})
-    print("Training job started...")
 
-    # 6. Deployment (optional)
-    print("Deploying the trained model...")
-    predictor = estimator.deploy(
-        initial_instance_count=1,
-        instance_type='ml.m4.xlarge'
-    )
+    # 6. Deploy
+    print("Deploying model to endpoint...")
+    predictor = estimator.deploy(initial_instance_count=1, instance_type='ml.m4.xlarge')
 
-    # 7. Make Predictions (Example input data)
-    print("Making predictions using the deployed model...")
-    input_data = np.array([5.1, 3.5, 1.4, 0.2]).reshape(1, -1)
-    predictions = predictor.predict(input_data)
-    print("Predictions:", predictions)
+    # 7. Inference
+    print("Sending test prediction...")
+    test_input = np.array([5.1, 3.5, 1.4, 0.2]).reshape(1, -1)
+    prediction = predictor.predict(test_input)
+    print("Prediction:", prediction)
 
-    # 8. Clean Up
-    print("Deleting the endpoint...")
-    predictor.delete_endpoint()
+    # 8. Clean up
+    print("Deleting endpoint...")
+    sagemaker.Session().delete_endpoint(predictor.endpoint_name)
 
-    print("Done!")
-
+    print("Done.")
